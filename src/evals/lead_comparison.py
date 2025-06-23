@@ -11,9 +11,26 @@ from src.types import Lead
 console = Console()
 
 
-def normalize_name(name: str) -> str:
-    """Normalize name for comparison (lowercase, remove extra spaces)"""
-    return name.lower().strip().replace("  ", " ")
+def normalize_text(text: str) -> str:
+    """Normalize text for comparison (lowercase, remove extra spaces)"""
+    if not text:
+        return ""
+    return text.lower().strip().replace("  ", " ")
+
+
+def leads_match(lead1: Lead, lead2: Lead) -> bool:
+    """Check if two leads match based on name or email"""
+    # Normalize both leads' name and email
+    lead1_name = normalize_text(lead1.name) if lead1.name else ""
+    lead1_email = normalize_text(lead1.email) if lead1.email else ""
+    lead2_name = normalize_text(lead2.name) if lead2.name else ""
+    lead2_email = normalize_text(lead2.email) if lead2.email else ""
+
+    # Match if either name or email matches (and is not empty)
+    name_match = lead1_name and lead2_name and lead1_name == lead2_name
+    email_match = lead1_email and lead2_email and lead1_email == lead2_email
+
+    return name_match or email_match
 
 
 def find_lead_matches(
@@ -24,25 +41,37 @@ def find_lead_matches(
     - matches: List of (actual_lead, expected_lead) tuples
     - missing: Expected leads not found in actual
     - extra: Actual leads not found in expected
-    """
-    # Create lookup dictionaries by normalized name
-    actual_dict = {normalize_name(lead.name): lead for lead in actual_leads}
-    expected_dict = {normalize_name(lead.name): lead for lead in expected_leads}
 
+    Leads match if either their names or emails match.
+    """
     matches = []
     missing = []
     extra = []
 
+    # Keep track of which actual leads have been matched
+    matched_actual_indices = set()
+
     # Find matches and missing
-    for norm_name, expected_lead in expected_dict.items():
-        if norm_name in actual_dict:
-            matches.append((actual_dict[norm_name], expected_lead))
-        else:
+    for expected_lead in expected_leads:
+        found_match = False
+
+        for i, actual_lead in enumerate(actual_leads):
+            # Skip if this actual lead is already matched
+            if i in matched_actual_indices:
+                continue
+
+            if leads_match(actual_lead, expected_lead):
+                matches.append((actual_lead, expected_lead))
+                matched_actual_indices.add(i)
+                found_match = True
+                break
+
+        if not found_match:
             missing.append(expected_lead)
 
-    # Find extra leads
-    for norm_name, actual_lead in actual_dict.items():
-        if norm_name not in expected_dict:
+    # Find extra leads (actual leads that weren't matched)
+    for i, actual_lead in enumerate(actual_leads):
+        if i not in matched_actual_indices:
             extra.append(actual_lead)
 
     return matches, missing, extra
