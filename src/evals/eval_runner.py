@@ -10,7 +10,10 @@ from src.types import EvalParams
 
 
 async def test_correctness_with_visual_comparison(
-    call_agent: Callable, eval_params: EvalParams
+    call_agent: Callable,
+    eval_params: EvalParams,
+    model: str = "openai:gpt-4o-mini",
+    n_results_search: int = 5,
 ) -> dict[str, GEval | float]:
     """Enhanced test function with visual lead comparison before evaluation"""
     correctness_metric = GEval(
@@ -29,7 +32,9 @@ async def test_correctness_with_visual_comparison(
         threshold=0.5,
     )
 
-    result, query = await call_agent(eval_params.query_params)
+    result, query = await call_agent(
+        eval_params.query_params, model=model, n_results_search=n_results_search
+    )
 
     print("=" * 80)
     rprint(f"Query \n{query}")
