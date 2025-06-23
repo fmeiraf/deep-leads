@@ -224,3 +224,5 @@ def display_leads_comparison(
     console.print("[bold white]Starting Evaluation...[/bold white]")
     console.print("─" * 80, style="dim white")
     console.print()
+
+    return recall

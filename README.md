@@ -128,6 +128,7 @@ await test_correctness_with_visual_comparison(EDMONTON_HUMAN_NUTRITION_RESEARCH_
 ## 🛣️ Roadmap
 
 - [ ] Multi-agent architecture for specialized research tasks
+- [ ] Add context summarizer to deal with context window limitations
 - [ ] Improve lead_comparison using embeds of semantic checks (now relying on string match which is not optimal)
 - [ ] Enhanced fact-checking and validation pipeline
 - [ ] Broader search path exploration with fallback strategies

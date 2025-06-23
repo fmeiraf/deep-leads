@@ -44,13 +44,61 @@ class Lead(BaseModel):
         default=None,
     )
 
+    def to_string(self) -> str:
+        """
+        Converts the Lead instance to a readable string representation.
+        """
+        data = self.model_dump()
+        lines = []
+
+        if data.get("name"):
+            lines.append(f"Name: {data['name']}")
+        if data.get("title"):
+            lines.append(f"Title: {data['title']}")
+        if data.get("headline"):
+            lines.append(f"Headline: {data['headline']}")
+        if data.get("email"):
+            lines.append(f"Email: {data['email']}")
+        if data.get("phone"):
+            lines.append(f"Phone: {data['phone']}")
+        if data.get("website"):
+            lines.append(f"Website: {data['website']}")
+        if data.get("background_summary"):
+            lines.append(f"Background: {data['background_summary']}")
+        if data.get("source_url"):
+            lines.append(f"Source: {data['source_url']}")
+
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        """
+        String representation of the Lead instance.
+        """
+        return self.to_string()
+
 
 class LeadResults(BaseModel):
     leads: list[Lead]
 
+    def to_string(self) -> str:
+        """
+        Converts all leads in the results to a readable string representation.
+        """
+        if not self.leads:
+            return "No leads found."
+
+        lead_strings = [lead.to_string() for lead in self.leads]
+        return "\n\n".join(lead_strings)
+
+    def __str__(self) -> str:
+        """
+        String representation of the LeadResults instance.
+        """
+        return self.to_string()
+
 
 class EvalParams(BaseModel):
     query_params: ResearchParams
-    expected_results: list[Lead] = Field(
+    expected_results: LeadResults = Field(
         description="The expected results of the query",
     )
