@@ -611,7 +611,7 @@ Sci - Ag, Food & Nutri Sci Dept""",
                 background_summary=None,
             ),
             Lead(
-                name="Cameron Carlyle, PhD",
+                name="Cameron Carlyle",
                 email=None,
                 title="Associate Professor",
                 headline="""Associate Professor, Faculty of Agricultural, Life and Environmental Sci - Ag, Food & Nutri Sci 

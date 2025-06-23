@@ -22,7 +22,7 @@ class ResearchParams(BaseModel):
 
 class Lead(BaseModel):
     name: str = Field(
-        description="The name of the person (exclude any titles or degrees like PhD, MD, etc.)",
+        description="The name of the person (exclude any titles or degrees like PhD, MD, Dr., professional titles, etc.)",
     )
     email: Optional[str] = None
     title: Optional[str] = Field(
