@@ -1,6 +1,6 @@
 from src.types import EvalParams, Lead, LeadResults, ResearchParams
 
-EDMONTON_HUMAN_NUTRITION_RESEARCH_UNIT = EvalParams(
+EDMONTON_HUMAN_NUTRITION_RESEARCH_UNIT__VERY_NARROW_SCOPE = EvalParams(
     query_params=ResearchParams(
         who_query="professors",
         what_query="Human Nutrition",
@@ -27,10 +27,10 @@ EDMONTON_HUMAN_NUTRITION_RESEARCH_UNIT = EvalParams(
     ),
 )
 
-EDMONTON_ALES_RESEARCHERS = EvalParams(
+EDMONTON_ALES_RESEARCHERS__MID_BROAD_SCOPE = EvalParams(
     query_params=ResearchParams(
         who_query="professors",
-        what_query="Human Nutrition",
+        what_query="all fields",
         where_query="Department of Agricultural, Food & Nutritional Science at University of Alberta",
         context_query="professors and researchers who are leading a lab or a team of researchers",
     ),
@@ -72,7 +72,7 @@ starch and mixed linkage beta-glucans.""",
             ),
             Lead(
                 name="Marleny Aranda Saldana",
-                email="marleny@ualberta.ca",
+                email="marleny.saldana@ualberta.ca",
                 title="Professor",
                 headline="""Professor, Faculty of Agricultural, Life and Environmental Sciences - Ag, Food & Nutri Sci Dept""",
                 phone="(780) 492-8018",
