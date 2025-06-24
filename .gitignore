@@ -12,3 +12,6 @@ wheels/
 .env.local
 
 .DS_Store
+
+.checkpoints/
+*.csv
