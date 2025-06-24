@@ -225,4 +225,4 @@ def display_leads_comparison(
     console.print("─" * 80, style="dim white")
     console.print()
 
-    return recall
+    return recall, total_extra

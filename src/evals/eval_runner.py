@@ -12,7 +12,8 @@ from src.types import EvalParams
 async def test_correctness_with_visual_comparison(
     call_agent: Callable,
     eval_params: EvalParams,
-    model: str = "openai:gpt-4o-mini",
+    researcher_model: str = "openai:gpt-4.1-mini-2025-04-14",
+    orchestrator_model: str = "openai:gpt-4.1-mini-2025-04-14",
     n_results_search: int = 5,
 ) -> dict[str, GEval | float]:
     """Enhanced test function with visual lead comparison before evaluation"""
@@ -33,7 +34,10 @@ async def test_correctness_with_visual_comparison(
     )
 
     result, query = await call_agent(
-        eval_params.query_params, model=model, n_results_search=n_results_search
+        eval_params.query_params,
+        researcher_model=researcher_model,
+        orchestrator_model=orchestrator_model,
+        n_results_search=n_results_search,
     )
 
     print("=" * 80)
@@ -44,7 +48,7 @@ async def test_correctness_with_visual_comparison(
     print("\n" + "=" * 80)
     print("VISUAL LEAD COMPARISON")
     print("=" * 80)
-    recall_matches = display_leads_comparison(
+    recall_matches, total_extra = display_leads_comparison(
         result.leads, eval_params.expected_results.leads
     )
 
@@ -57,4 +61,8 @@ async def test_correctness_with_visual_comparison(
 
     eval_results = evaluate(test_cases=[test_case], metrics=[correctness_metric])
 
-    return {"eval_results": eval_results, "recall_matches": recall_matches}
+    return {
+        "eval_results": eval_results,
+        "recall_matches": recall_matches,
+        "total_extra_leads": total_extra,
+    }

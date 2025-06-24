@@ -3,11 +3,11 @@ import os
 import logfire
 from dotenv import load_dotenv
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelMessage
 from pydantic_ai.tools import RunContext
 from tavily import TavilyClient
 
 from src.agents.utils.build_final_query import build_final_query
+from src.agents.utils.message_processors import summarize_old_messages
 from src.types import LeadResults, ResearchParams
 
 load_dotenv(dotenv_path="../.env.local")
@@ -20,8 +20,9 @@ tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 async def run_single_agent(
     query: ResearchParams,
-    model: str = "openai:gpt-4o-mini",
+    researcher_model: str = "openai:gpt-4.1-mini-2025-04-14",
     n_results_search: int = 5,
+    **kwargs,
 ) -> tuple[LeadResults, str]:
     SYSTEM_PROMPT = """
     You are an expert lead research agent specializing in finding high-quality contact information for specific professionals, 
@@ -205,23 +206,12 @@ async def run_single_agent(
     Find as many leads as possible while maintaining strict accuracy standards. Quality over quantity - better to have fewer verified leads than many questionable ones.
     """
 
-    def context_window_processor(
-        ctx: RunContext[None], messages: list[ModelMessage]
-    ) -> list[ModelMessage]:
-        # Access current usage
-        current_tokens = ctx.usage.total_tokens
-
-        # Filter messages based on context
-        if current_tokens > 1e6:
-            return messages[-3:]  # Keep only recent messages when token usage is high
-        return messages
-
     deep_leads_agent = Agent(
-        model,
+        researcher_model,
         deps_type=int,
         output_type=LeadResults,
         system_prompt=SYSTEM_PROMPT,
-        history_processor=[context_window_processor],
+        history_processor=[summarize_old_messages],
     )
 
     @deep_leads_agent.tool

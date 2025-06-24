@@ -97,6 +97,26 @@ class LeadResults(BaseModel):
         return self.to_string()
 
 
+class ResearcherResults(BaseModel):
+    task: str = Field(
+        description="The task that the researcher was assigned",
+    )
+    search_strategy: str = Field(
+        description="The search strategy that the researcher used",
+    )
+    leads: list[Lead]
+
+    def to_string(self) -> str:
+        """
+        Converts all leads in the results to a readable string representation.
+        """
+        if not self.leads:
+            return "No leads found."
+
+        lead_strings = [lead.to_string() for lead in self.leads]
+        return "\n\n".join(lead_strings)
+
+
 class EvalParams(BaseModel):
     query_params: ResearchParams
     expected_results: LeadResults = Field(
