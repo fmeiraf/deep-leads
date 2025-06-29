@@ -16,3 +16,6 @@ wheels/
 .checkpoints/
 *.csv
 .deepeval/
+.mlflow/
+mlartifacts/
+*.sqlite
