@@ -19,3 +19,6 @@ wheels/
 .mlflow/
 mlartifacts/
 *.sqlite
+demo_queries/
+synthetic_queries/
+*.json
