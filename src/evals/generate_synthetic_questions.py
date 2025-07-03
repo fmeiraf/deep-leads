@@ -29,51 +29,6 @@ COUNTRIES = {
     "BR": "Brazil",
 }
 
-# Major cities for location-based queries
-CITIES = {
-    "US": [
-        "New York",
-        "Los Angeles",
-        "Chicago",
-        "Boston",
-        "San Francisco",
-        "Seattle",
-        "Austin",
-        "Washington",
-    ],
-    "GB": [
-        "London",
-        "Oxford",
-        "Cambridge",
-        "Manchester",
-        "Edinburgh",
-        "Bristol",
-        "Birmingham",
-    ],
-    "CA": [
-        "Toronto",
-        "Vancouver",
-        "Montreal",
-        "Calgary",
-        "Edmonton",
-        "Ottawa",
-        "Waterloo",
-    ],
-    "AU": [
-        "Sydney",
-        "Melbourne",
-        "Brisbane",
-    ],
-    "BR": [
-        "São Paulo",
-        "Rio de Janeiro",
-        "Belo Horizonte",
-        "Brasília",
-        "Porto Alegre",
-        "Campinas",
-    ],
-}
-
 
 ROLES = [
     "researchers",
@@ -121,17 +76,14 @@ class GenerationConfig(BaseModel):
     output_file: str = Field(
         default="synthetic_queries.json", description="Final output file"
     )
-    domain_topic_ratio: float = Field(
-        default=0.3, description="Ratio of domain/topic-based queries"
+    country_based_queries_ratio: float = Field(
+        default=0.1, description="Ratio of country-based queries"
     )
-    institution_focused_ratio: float = Field(
-        default=0.3, description="Ratio of institution-focused queries"
+    city_based_queries_ratio: float = Field(
+        default=0.4, description="Ratio of city-based queries"
     )
-    individual_researcher_ratio: float = Field(
-        default=0.2, description="Ratio of individual researcher queries"
-    )
-    location_based_ratio: float = Field(
-        default=0.2, description="Ratio of location-based queries"
+    institution_based_queries_ratio: float = Field(
+        default=0.5, description="Ratio of institution-based queries"
     )
 
 
@@ -151,21 +103,22 @@ class SyntheticQueryGenerator:
         pyalex.config.email = os.getenv("PYALEX_EMAIL")
         self.city_search_cache = {}
 
-        # getting max values based on the config
-        self.max_entry_per_city = (
-            self.config.target_queries * self.config.location_based_ratio
-        ) / sum(len(CITIES[country]) for country in COUNTRIES.keys())
-
-        self.max_entry_per_institution = (
-            self.config.target_queries * self.config.institution_focused_ratio
-        ) / len(pyalex.Institutions().get())
-
         # Initialize the body of work
         self.institution_based_searches = []
         self.city_based_searches = []
         self.country_based_searches = []
         self.field_based_searches = []
 
+        # getting the number of queries to generate for each type
+        self.institution_based_queries_target = int(
+            self.config.target_queries * self.config.institution_based_queries_ratio
+        )
+        self.city_based_queries_target = int(
+            self.config.target_queries * self.config.city_based_queries_ratio
+        )
+        self.country_based_queries_target = int(
+            self.config.target_queries * self.config.country_based_queries_ratio
+        )
         self.role_variations = [
             "researchers",
             "experts",
@@ -176,7 +129,7 @@ class SyntheticQueryGenerator:
             "researchers",
         ]
 
-    async def initialize_data(self) -> None:
+    async def gather_data(self) -> None:
         """Initialize OpenAlex data caches"""
         rprint("[white]Initializing main OpenAlex query and topic maps...[/white]")
 
@@ -317,6 +270,24 @@ class SyntheticQueryGenerator:
     ) -> List[Lead]:
         pass
 
+    def get_current_combination_counts(self):
+        institution_combinations = sum(
+            len(topics) for topics in self.topics_per_institution.values()
+        )
+        city_combinations = sum(len(topics) for topics in self.topics_per_city.values())
+        country_combinations = sum(
+            len(topics) for topics in self.topics_per_country.values()
+        )
+        total_combinations = (
+            institution_combinations + city_combinations + country_combinations
+        )
+        return (
+            total_combinations,
+            institution_combinations,
+            city_combinations,
+            country_combinations,
+        )
+
     async def _get_main_query(self):
         """This is main query to iterate over and generate all the necessary queries"""
 
@@ -334,12 +305,25 @@ class SyntheticQueryGenerator:
             set
         )  # {institution_id: [topic_id_1, ..]}
 
-        valid_queries = 0
         for record in chain(*self.main_query.paginate(per_page=200)):
-            if valid_queries >= self.config.target_queries:
+            # checking if we have enough combinations
+            (
+                total_combinations,
+                valid_institution_queries,
+                valid_city_queries,
+                valid_country_queries,
+            ) = self.get_current_combination_counts()
+            if total_combinations >= self.config.target_queries:
                 return
+
+            # starting to process the record
+
             authorships = record.get("authorships", [])
             if not authorships:
+                continue
+
+            primary_topic = record.get("primary_topic", {})
+            if not primary_topic:
                 continue
 
             for author in authorships:
@@ -347,20 +331,32 @@ class SyntheticQueryGenerator:
                 if not institution:
                     continue
                 for inst in institution:
+                    # refreshing the counts
+                    (
+                        total_combinations,
+                        valid_institution_queries,
+                        valid_city_queries,
+                        valid_country_queries,
+                    ) = self.get_current_combination_counts()
+
                     if inst.get("country_code") in COUNTRIES.keys():
                         # Adding record on country level
-                        self.topics_per_country[inst.get("country_code")].add(
-                            record["primary_topic"]["id"]
-                        )
-                        valid_queries += 1
+                        if valid_country_queries < self.country_based_queries_target:
+                            self.topics_per_country[inst.get("country_code")].add(
+                                primary_topic["id"]
+                            )
 
                         # Adding record on institution level
-                        self.topics_per_institution[inst.get("id")].add(
-                            record["primary_topic"]["id"]
-                        )
-                        valid_queries += 1
+                        if (
+                            valid_institution_queries
+                            < self.institution_based_queries_target
+                        ):
+                            self.topics_per_institution[inst.get("id")].add(
+                                primary_topic["id"]
+                            )
 
                         # Adding record on city level
+
                         institution_search = (
                             pyalex.Institutions()
                             .search_filter(display_name=inst.get("display_name"))
@@ -368,19 +364,16 @@ class SyntheticQueryGenerator:
                         )
 
                         for inst_ in institution_search:
-                            if inst_.get("id") == inst.get("id"):
-                                city = inst_.get("geo", {}).get("city")
-                                print(inst_.get("geo", {}))
-                                if city:
-                                    self.topics_per_city[city].add(
-                                        (
-                                            record["primary_topic"]["id"],
-                                            inst.get("country_code"),
+                            if valid_city_queries < self.city_based_queries_target:
+                                if inst_.get("id") == inst.get("id"):
+                                    city = inst_.get("geo", {}).get("city")
+                                    if city:
+                                        self.topics_per_city[city].add(
+                                            (
+                                                primary_topic["id"],
+                                                inst.get("country_code"),
+                                            )
                                         )
-                                    )
-                                    valid_queries += 1
-
-        return
 
     async def _get_city_based_searches(self) -> List[Dict]:
         rprint("[cyan]Processing city-based searches...[/cyan]")
