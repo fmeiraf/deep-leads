@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import random
 from collections import defaultdict
@@ -129,6 +130,267 @@ class SyntheticQueryGenerator:
             "academics",
             "researchers",
         ]
+
+        # Checkpoint files
+        self.gathered_data_file = self.checkpoint_dir / "gathered_data.json"
+        self.checkpoint_pattern = "checkpoint_batch_{}.json"
+        self.progress_file = self.checkpoint_dir / "progress.json"
+
+    def save_gathered_data(self) -> None:
+        """Save the gathered data structures to JSON for recovery"""
+        gathered_data = {
+            "topics_per_country": {
+                k: list(v) for k, v in self.topics_per_country.items()
+            },
+            "topics_per_city": {k: list(v) for k, v in self.topics_per_city.items()},
+            "topics_per_institution": {
+                k: list(v) for k, v in self.topics_per_institution.items()
+            },
+            "city_search_cache": self.city_search_cache,
+        }
+
+        with open(self.gathered_data_file, "w") as f:
+            json.dump(gathered_data, f, indent=2)
+
+        rprint(f"[green]Saved gathered data to {self.gathered_data_file}[/green]")
+
+    def load_gathered_data(self) -> bool:
+        """Load gathered data from JSON checkpoint"""
+        if not self.gathered_data_file.exists():
+            return False
+
+        try:
+            with open(self.gathered_data_file, "r") as f:
+                gathered_data = json.load(f)
+
+            # Convert back to defaultdict with sets
+            self.topics_per_country = defaultdict(set)
+            for k, v in gathered_data["topics_per_country"].items():
+                self.topics_per_country[k] = set(v)
+
+            self.topics_per_city = defaultdict(set)
+            for k, v in gathered_data["topics_per_city"].items():
+                self.topics_per_city[k] = set(
+                    tuple(item) if isinstance(item, list) else item for item in v
+                )
+
+            self.topics_per_institution = defaultdict(set)
+            for k, v in gathered_data["topics_per_institution"].items():
+                self.topics_per_institution[k] = set(v)
+
+            self.city_search_cache = gathered_data.get("city_search_cache", {})
+
+            rprint(
+                f"[green]Loaded gathered data from {self.gathered_data_file}[/green]"
+            )
+            return True
+
+        except Exception as e:
+            rprint(f"[red]Error loading gathered data: {e}[/red]")
+            return False
+
+    def has_gathered_data_checkpoint(self) -> bool:
+        """Check if gathered data checkpoint exists"""
+        return self.gathered_data_file.exists()
+
+    def save_checkpoint(self, batch_num: int, results: List[Sample]) -> None:
+        """Save checkpoint for a batch of results"""
+        checkpoint_file = self.checkpoint_dir / self.checkpoint_pattern.format(
+            batch_num
+        )
+
+        # Convert Sample objects to dictionaries for JSON serialization
+        checkpoint_data = {
+            "batch_num": batch_num,
+            "results": [sample.dict() for sample in results],
+            "timestamp": asyncio.get_event_loop().time(),
+        }
+
+        with open(checkpoint_file, "w") as f:
+            json.dump(checkpoint_data, f, indent=2)
+
+        rprint(
+            f"[green]Saved checkpoint for batch {batch_num} to {checkpoint_file}[/green]"
+        )
+
+    def load_checkpoint(self, batch_num: int) -> List[Sample]:
+        """Load checkpoint for a specific batch"""
+        checkpoint_file = self.checkpoint_dir / self.checkpoint_pattern.format(
+            batch_num
+        )
+
+        if not checkpoint_file.exists():
+            return []
+
+        try:
+            with open(checkpoint_file, "r") as f:
+                checkpoint_data = json.load(f)
+
+            # Convert dictionaries back to Sample objects
+            results = [
+                Sample(**sample_dict) for sample_dict in checkpoint_data["results"]
+            ]
+            rprint(
+                f"[green]Loaded checkpoint for batch {batch_num} with {len(results)} results[/green]"
+            )
+            return results
+
+        except Exception as e:
+            rprint(f"[red]Error loading checkpoint for batch {batch_num}: {e}[/red]")
+            return []
+
+    def get_checkpoint_files(self) -> List[int]:
+        """Get list of existing checkpoint batch numbers"""
+        checkpoint_files = []
+        for file in self.checkpoint_dir.glob("checkpoint_batch_*.json"):
+            try:
+                batch_num = int(file.stem.split("_")[-1])
+                checkpoint_files.append(batch_num)
+            except ValueError:
+                continue
+        return sorted(checkpoint_files)
+
+    def save_progress(self, completed_batches: List[int], total_results: int) -> None:
+        """Save progress information"""
+        progress_data = {
+            "completed_batches": completed_batches,
+            "total_results": total_results,
+            "timestamp": asyncio.get_event_loop().time(),
+        }
+
+        with open(self.progress_file, "w") as f:
+            json.dump(progress_data, f, indent=2)
+
+    def load_progress(self) -> Dict:
+        """Load progress information"""
+        if not self.progress_file.exists():
+            return {"completed_batches": [], "total_results": 0}
+
+        try:
+            with open(self.progress_file, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            rprint(f"[red]Error loading progress: {e}[/red]")
+            return {"completed_batches": [], "total_results": 0}
+
+    def cleanup_checkpoints(self) -> None:
+        """Clean up checkpoint files after successful completion"""
+        try:
+            # Remove all checkpoint files
+            for file in self.checkpoint_dir.glob("checkpoint_batch_*.json"):
+                file.unlink()
+
+            # Remove progress file
+            if self.progress_file.exists():
+                self.progress_file.unlink()
+
+            # Keep gathered_data.json as it might be useful for future runs
+            rprint("[green]Cleaned up checkpoint files[/green]")
+
+        except Exception as e:
+            rprint(
+                f"[yellow]Warning: Could not clean up checkpoint files: {e}[/yellow]"
+            )
+
+    async def generate_queries(self) -> List[Sample]:
+        """Generate synthetic queries with checkpointing and recovery"""
+        rprint("[cyan]Starting synthetic query generation with checkpointing...[/cyan]")
+
+        # Check for existing progress
+        progress = self.load_progress()
+        completed_batches = progress.get("completed_batches", [])
+        all_results = []
+
+        # Load existing checkpoints
+        for batch_num in completed_batches:
+            batch_results = self.load_checkpoint(batch_num)
+            all_results.extend(batch_results)
+
+        if all_results:
+            rprint(
+                f"[green]Recovered {len(all_results)} results from {len(completed_batches)} completed batches[/green]"
+            )
+
+        # Load or gather data (this populates the search lists with Sample objects)
+        if not self.has_gathered_data_checkpoint():
+            await self.gather_data()
+            self.save_gathered_data()
+        else:
+            rprint("[cyan]Loading gathered data from checkpoint...[/cyan]")
+            self.load_gathered_data()
+            # Still need to build the searches from loaded data
+            await self._build_searches_from_loaded_data()
+
+        # Get all searches to process
+        all_searches = (
+            self.institution_based_searches
+            + self.city_based_searches
+            + self.country_based_searches
+        )
+
+        # Filter out already processed searches
+        remaining_searches = all_searches[len(all_results) :]
+
+        if not remaining_searches:
+            rprint("[green]All queries already generated![/green]")
+            return all_results
+
+        # Process in batches
+        batch_size = self.config.batch_size
+        total_batches = (len(remaining_searches) + batch_size - 1) // batch_size
+
+        rprint(
+            f"[cyan]Processing {len(remaining_searches)} remaining searches in {total_batches} batches[/cyan]"
+        )
+
+        for batch_idx in range(total_batches):
+            batch_num = len(completed_batches) + batch_idx
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(remaining_searches))
+            batch_searches = remaining_searches[start_idx:end_idx]
+
+            rprint(
+                f"[cyan]Processing batch {batch_num + 1}/{total_batches + len(completed_batches)} ({len(batch_searches)} searches)[/cyan]"
+            )
+
+            # The searches are already Sample objects, so we can directly save them
+            batch_results = batch_searches
+
+            # Save checkpoint
+            self.save_checkpoint(batch_num, batch_results)
+            all_results.extend(batch_results)
+
+            # Update progress
+            completed_batches.append(batch_num)
+            self.save_progress(completed_batches, len(all_results))
+
+            rprint(
+                f"[green]Completed batch {batch_num + 1}, total results: {len(all_results)}[/green]"
+            )
+
+        # Save final results
+        final_output = self.checkpoint_dir.parent / self.config.output_file
+        with open(final_output, "w") as f:
+            json.dump([sample.dict() for sample in all_results], f, indent=2)
+
+        rprint(
+            f"[green]Generated {len(all_results)} synthetic queries and saved to {final_output}[/green]"
+        )
+
+        # Optional cleanup of checkpoints after successful completion
+        # Uncomment the next line if you want to automatically clean up checkpoints
+        # self.cleanup_checkpoints()
+
+        return all_results
+
+    async def _build_searches_from_loaded_data(self) -> None:
+        """Build search lists from loaded data"""
+        if not self.institution_based_searches:
+            await self._get_institution_based_searches()
+        if not self.city_based_searches:
+            await self._get_city_based_searches()
+        if not self.country_based_searches:
+            await self._get_country_based_searches()
 
     async def gather_data(self) -> None:
         """Initialize OpenAlex data caches"""
@@ -727,7 +989,7 @@ class SyntheticQueryGenerator:
 
 
 async def main():
-    """Example usage of the synthetic query generator"""
+    """Example usage of the synthetic query generator with checkpointing"""
     config = GenerationConfig(
         target_queries=100,  # Start with smaller number for testing
         batch_size=10,
@@ -737,17 +999,28 @@ async def main():
     )
 
     generator = SyntheticQueryGenerator(config)
-    results = await generator.generate_queries()
 
-    print(f"\nGenerated {len(results)} synthetic queries!")
+    try:
+        results = await generator.generate_queries()
 
-    # Show a few examples
-    print("\nSample queries:")
-    for i, result in enumerate(results[:3]):
-        print(f"\n{i + 1}. {result.query_string}")
-        print(f"   Found {len(result.results.leads)} leads")
-        if result.results.leads:
-            print(f"   Sample lead: {result.results.leads[0].name}")
+        print(f"\nGenerated {len(results)} synthetic queries!")
+
+        # Show a few examples
+        print("\nSample queries:")
+        for i, result in enumerate(results[:3]):
+            print(f"\n{i + 1}. {result.query_string}")
+            print(f"   Found {len(result.expected_results.leads)} leads")
+            if result.expected_results.leads:
+                print(f"   Sample lead: {result.expected_results.leads[0].name}")
+
+    except KeyboardInterrupt:
+        print(
+            "\n[yellow]Process interrupted. Progress has been saved and can be resumed.[/yellow]"
+        )
+    except Exception as e:
+        print(f"\n[red]Error occurred: {e}[/red]")
+        print("[yellow]Check checkpoints for recovery.[/yellow]")
+        raise
 
 
 if __name__ == "__main__":
