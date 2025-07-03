@@ -87,6 +87,7 @@ class GenerationConfig(BaseModel):
     institution_based_queries_ratio: float = Field(
         default=0.5, description="Ratio of institution-based queries"
     )
+    parallel_batch_size: int = Field(default=3)
 
 
 class SyntheticQueryGenerator:
@@ -619,12 +620,15 @@ class SyntheticQueryGenerator:
                             )
 
                         # Adding record on city level
-
-                        institution_search = (
-                            pyalex.Institutions()
-                            .search_filter(display_name=inst.get("display_name"))
-                            .get()
-                        )
+                        try:
+                            institution_search = (
+                                pyalex.Institutions()
+                                .search_filter(display_name=inst.get("display_name"))
+                                .get()
+                            )
+                        except Exception as e:
+                            rprint(f"[red]Error searching for institution: {e}[/red]")
+                            continue
 
                         for inst_ in institution_search:
                             if valid_city_queries < self.city_based_queries_target:
@@ -640,36 +644,134 @@ class SyntheticQueryGenerator:
 
     async def _get_city_based_searches(self) -> List[Dict]:
         rprint("[cyan]Processing city-based searches...[/cyan]")
-        for city in tqdm(self.topics_per_city.keys(), desc="City-based searches"):
+
+        # Flatten all city-topic combinations into a single list
+        all_combinations = []
+        for city in self.topics_per_city.keys():
             for topic_id, country_code in self.topics_per_city[city]:
-                self.city_based_searches.append(
-                    await self._process_city_based_searches(
-                        topic_id, country_code, city
+                all_combinations.append((topic_id, country_code, city))
+
+        # Process in batches of 5
+        batch_size = self.config.parallel_batch_size
+        total_batches = (len(all_combinations) + batch_size - 1) // batch_size
+
+        rprint(
+            f"[cyan]Processing {len(all_combinations)} city-based searches in {total_batches} batches of {batch_size}[/cyan]"
+        )
+
+        with tqdm(total=len(all_combinations), desc="City-based searches") as pbar:
+            for batch_start in range(0, len(all_combinations), batch_size):
+                batch_end = min(batch_start + batch_size, len(all_combinations))
+                batch_combinations = all_combinations[batch_start:batch_end]
+
+                # Create tasks for this batch
+                tasks = []
+                for topic_id, country_code, city in batch_combinations:
+                    tasks.append(
+                        self._process_city_based_searches(topic_id, country_code, city)
                     )
-                )
+
+                # Run batch in parallel
+                batch_results = await asyncio.gather(*tasks)
+
+                # Add results to the main list
+                self.city_based_searches.extend(batch_results)
+
+                # Update progress bar
+                pbar.update(len(batch_combinations))
+
+                # Optional: Add a small delay between batches to be respectful to APIs
+                if batch_start + batch_size < len(all_combinations):
+                    await asyncio.sleep(0.1)
 
     async def _get_country_based_searches(self) -> List[Dict]:
         rprint("[cyan]Processing country-based searches...[/cyan]")
-        for country_code in tqdm(
-            self.topics_per_country.keys(), desc="Country-based searches"
-        ):
+
+        # Flatten all country-topic combinations into a single list
+        all_combinations = []
+        for country_code in self.topics_per_country.keys():
             for topic_id in self.topics_per_country[country_code]:
-                self.country_based_searches.append(
-                    await self._process_country_based_searches(topic_id, country_code)
-                )
+                all_combinations.append((topic_id, country_code))
+
+        # Process in batches of 5
+        batch_size = self.config.parallel_batch_size
+        total_batches = (len(all_combinations) + batch_size - 1) // batch_size
+
+        rprint(
+            f"[cyan]Processing {len(all_combinations)} country-based searches in {total_batches} batches of {batch_size}[/cyan]"
+        )
+
+        with tqdm(total=len(all_combinations), desc="Country-based searches") as pbar:
+            for batch_start in range(0, len(all_combinations), batch_size):
+                batch_end = min(batch_start + batch_size, len(all_combinations))
+                batch_combinations = all_combinations[batch_start:batch_end]
+
+                # Create tasks for this batch
+                tasks = []
+                for topic_id, country_code in batch_combinations:
+                    tasks.append(
+                        self._process_country_based_searches(topic_id, country_code)
+                    )
+
+                # Run batch in parallel
+                batch_results = await asyncio.gather(*tasks)
+
+                # Add results to the main list
+                self.country_based_searches.extend(batch_results)
+
+                # Update progress bar
+                pbar.update(len(batch_combinations))
+
+                # Optional: Add a small delay between batches to be respectful to APIs
+                if batch_start + batch_size < len(all_combinations):
+                    await asyncio.sleep(0.1)
 
     async def _get_institution_based_searches(self) -> List[Dict]:
         """Given a topic and an institution, generate a list of leads for each topic"""
         rprint("[cyan]Processing institution-based searches...[/cyan]")
-        for institution_id in tqdm(
-            self.topics_per_institution.keys(), desc="Institution-based searches"
-        ):
+
+        # Flatten all institution-topic combinations into a single list
+        all_combinations = []
+        for institution_id in self.topics_per_institution.keys():
             for topic_id in self.topics_per_institution[institution_id]:
-                self.institution_based_searches.append(
-                    await self._process_institution_based_searches(
-                        topic_id, institution_id
+                all_combinations.append((topic_id, institution_id))
+
+        # Process in batches of 5
+        batch_size = self.config.parallel_batch_size
+        total_batches = (len(all_combinations) + batch_size - 1) // batch_size
+
+        rprint(
+            f"[cyan]Processing {len(all_combinations)} institution-based searches in {total_batches} batches of {batch_size}[/cyan]"
+        )
+
+        with tqdm(
+            total=len(all_combinations), desc="Institution-based searches"
+        ) as pbar:
+            for batch_start in range(0, len(all_combinations), batch_size):
+                batch_end = min(batch_start + batch_size, len(all_combinations))
+                batch_combinations = all_combinations[batch_start:batch_end]
+
+                # Create tasks for this batch
+                tasks = []
+                for topic_id, institution_id in batch_combinations:
+                    tasks.append(
+                        self._process_institution_based_searches(
+                            topic_id, institution_id
+                        )
                     )
-                )
+
+                # Run batch in parallel
+                batch_results = await asyncio.gather(*tasks)
+
+                # Add results to the main list
+                self.institution_based_searches.extend(batch_results)
+
+                # Update progress bar
+                pbar.update(len(batch_combinations))
+
+                # Optional: Add a small delay between batches to be respectful to APIs
+                if batch_start + batch_size < len(all_combinations):
+                    await asyncio.sleep(0.1)
 
     async def _process_city_based_searches(
         self, topic_id: str, country_code: str, city: str
