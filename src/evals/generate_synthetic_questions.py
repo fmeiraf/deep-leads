@@ -185,7 +185,7 @@ class SyntheticQueryGenerator:
         rprint("[green]Starting building all the queries...[/green]")
 
         # self._get_city_based_searches()
-        # self._get_country_based_searches()
+        await self._get_country_based_searches()
         await self._get_institution_based_searches()
 
         rprint(
@@ -380,10 +380,16 @@ class SyntheticQueryGenerator:
         pass
 
     async def _get_country_based_searches(self) -> List[Dict]:
-        pass
+        rprint("[cyan]Processing country-based searches...[/cyan]")
+        for country_code in self.topics_per_country.keys():
+            for topic_id in self.topics_per_country[country_code]:
+                self.country_based_searches.append(
+                    await self._process_country_based_searches(topic_id, country_code)
+                )
 
     async def _get_institution_based_searches(self) -> List[Dict]:
         """Given a topic and an institution, generate a list of leads for each topic"""
+        rprint("[cyan]Processing institution-based searches...[/cyan]")
         for institution_id in self.topics_per_institution.keys():
             for topic_id in self.topics_per_institution[institution_id]:
                 self.institution_based_searches.append(
@@ -391,6 +397,105 @@ class SyntheticQueryGenerator:
                         topic_id, institution_id
                     )
                 )
+
+    async def _process_country_based_searches(
+        self, topic_id: str, country_code: str
+    ) -> LeadResults:
+        """Process institution-based searches for a list of topics and an institution"""
+        query_results = (
+            pyalex.Works()
+            .filter(publication_year=f">{self.start_year}")
+            .filter(authorships={"institutions.country_code": country_code})
+            .filter(topics={"id": topic_id})
+            .get()
+        )
+
+        leads = []
+        title = random.choice(ROLES)
+        topic_name = ""
+        institution_name = ""
+        openalex_results = None
+        selected_authors = set()
+
+        for record in query_results:
+            if record.get("authorships", []):
+                for authorship in record.get("authorships", []):
+                    if authorship.get("institutions", []):
+                        for inst in authorship.get("institutions", []):
+                            if inst.get("country_code") == country_code:
+                                # getting relevant openalex data
+                                topic = record.get("primary_topic", {})
+                                topic_name = topic.get("display_name")
+                                topic_keywords = topic.get("keywords")
+                                topic_domain = topic.get("domain").get("display_name")
+                                topic_field = topic.get("field").get("display_name")
+                                topic_subfield = topic.get("subfield").get(
+                                    "display_name"
+                                )
+                                institution_name = inst.get("display_name")
+                                target_researcher_id = authorship.get("author", {}).get(
+                                    "id"
+                                )
+                                target_researcher_name = authorship.get(
+                                    "author", {}
+                                ).get("display_name")
+                                work_id = record.get("id")
+
+                                if target_researcher_id in selected_authors:
+                                    continue
+
+                                selected_authors.add(target_researcher_id)
+
+                                # getting the final leads
+                                leads.append(
+                                    Lead(
+                                        name=target_researcher_name,
+                                        title=title,
+                                        headline=f"Researcher in {institution_name}",
+                                        institution=institution_name,
+                                        source_url=target_researcher_id,
+                                    )
+                                )
+
+                                openalex_results = OpenAlexResults(
+                                    topic_id=topic_id,
+                                    topic_display_name=topic_name,
+                                    topic_keywords=topic_keywords,
+                                    topic_domain=topic_domain,
+                                    topic_field=topic_field,
+                                    topic_subfield=topic_subfield,
+                                    institution_id=inst.get("id"),
+                                    institution_country=country_code,
+                                    target_researcher_id=target_researcher_id,
+                                    target_researcher_name=target_researcher_name,
+                                    work_id=work_id,
+                                )
+
+        # Validate that we have all required data
+        if not openalex_results or not topic_name or not leads:
+            raise ValueError(
+                f"Missing required data for country {country_code}, topic {topic_id}: "
+                f"openalex_results={openalex_results is not None}, "
+                f"topic_name='{topic_name}', "
+                f"leads_count={len(leads)}"
+            )
+
+        research_params = ResearchParams(
+            who_query=title,
+            what_query=topic_name,
+            where_query=COUNTRIES[country_code],
+        )
+        query_string = build_final_query(research_params)
+
+        sample = Sample(
+            query_params=research_params,
+            query_string=query_string,
+            query_type=QueryType.INSTITUTION_FOCUSED,
+            expected_results=LeadResults(leads=leads),
+            openalex_results=openalex_results,
+        )
+
+        return sample
 
     async def _process_institution_based_searches(
         self, topic_id: str, institution_id: str
@@ -404,9 +509,7 @@ class SyntheticQueryGenerator:
             .filter(topics={"id": topic_id})
             .get()
         )
-        rprint(
-            f"Query params: year: {self.start_year}, country: {self.country_string}, institution: {institution_id}, topic: {topic_id}"
-        )
+
         leads = []
         title = random.choice(ROLES)
         topic_name = ""
@@ -493,9 +596,6 @@ class SyntheticQueryGenerator:
         )
 
         return sample
-
-    async def _get_field_based_searches(self) -> List[Dict]:
-        pass
 
 
 async def main():
