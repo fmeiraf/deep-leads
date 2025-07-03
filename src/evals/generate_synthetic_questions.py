@@ -1,0 +1,526 @@
+import asyncio
+import os
+import random
+from collections import defaultdict
+from itertools import chain
+from pathlib import Path
+from typing import Dict, List
+
+import pyalex
+from pydantic import BaseModel, Field
+from rich import print as rprint
+from rich.console import Console
+
+from src.agents.utils.build_final_query import build_final_query
+from src.types import (
+    Lead,
+    LeadResults,
+    OpenAlexResults,
+    QueryType,
+    ResearchParams,
+    Sample,
+)
+
+COUNTRIES = {
+    "US": "United States",
+    "GB": "United Kingdom",
+    "CA": "Canada",
+    "AU": "Australia",
+    "BR": "Brazil",
+}
+
+# Major cities for location-based queries
+CITIES = {
+    "US": [
+        "New York",
+        "Los Angeles",
+        "Chicago",
+        "Boston",
+        "San Francisco",
+        "Seattle",
+        "Austin",
+        "Washington",
+    ],
+    "GB": [
+        "London",
+        "Oxford",
+        "Cambridge",
+        "Manchester",
+        "Edinburgh",
+        "Bristol",
+        "Birmingham",
+    ],
+    "CA": [
+        "Toronto",
+        "Vancouver",
+        "Montreal",
+        "Calgary",
+        "Edmonton",
+        "Ottawa",
+        "Waterloo",
+    ],
+    "AU": [
+        "Sydney",
+        "Melbourne",
+        "Brisbane",
+    ],
+    "BR": [
+        "São Paulo",
+        "Rio de Janeiro",
+        "Belo Horizonte",
+        "Brasília",
+        "Porto Alegre",
+        "Campinas",
+    ],
+}
+
+
+ROLES = [
+    "researchers",
+    "experts",
+    "scientists",
+    "professors",
+    "specialists",
+]
+
+START_YEAR = 2023
+MAX_RESULTS_PER_PAGE = 200
+
+# Rate limiting semaphore - allow up to 10 concurrent requests
+API_SEMAPHORE = asyncio.Semaphore(10)
+API_DELAY = 0.1  # 100ms delay between requests to ensure ~10 requests/second
+
+
+async def rate_limited_api_call(api_call_func):
+    """Rate-limited wrapper for OpenAlex API calls"""
+    async with API_SEMAPHORE:
+        try:
+            result = api_call_func()
+            await asyncio.sleep(API_DELAY)
+            return result
+        except Exception as e:
+            await asyncio.sleep(API_DELAY)  # Still delay on errors
+            raise e
+
+
+class GenerationConfig(BaseModel):
+    """Configuration for synthetic query generation"""
+
+    target_queries: int = Field(
+        default=1000, description="Target number of queries to generate"
+    )
+    batch_size: int = Field(
+        default=250, description="Number of queries to process in each batch"
+    )
+    max_results_per_query: int = Field(
+        default=25, description="Maximum results to fetch per query"
+    )
+    checkpoint_dir: str = Field(
+        default="checkpoints", description="Directory to save checkpoints"
+    )
+    output_file: str = Field(
+        default="synthetic_queries.json", description="Final output file"
+    )
+    domain_topic_ratio: float = Field(
+        default=0.3, description="Ratio of domain/topic-based queries"
+    )
+    institution_focused_ratio: float = Field(
+        default=0.3, description="Ratio of institution-focused queries"
+    )
+    individual_researcher_ratio: float = Field(
+        default=0.2, description="Ratio of individual researcher queries"
+    )
+    location_based_ratio: float = Field(
+        default=0.2, description="Ratio of location-based queries"
+    )
+
+
+class SyntheticQueryGenerator:
+    """Generates synthetic academic queries using OpenAlex data"""
+
+    def __init__(self, config: GenerationConfig):
+        self.config = config
+        self.console = Console()
+        self.checkpoint_dir = Path(config.checkpoint_dir)
+        self.checkpoint_dir.mkdir(exist_ok=True)
+        self.final_results = []
+        self.country_string = "|".join(COUNTRIES.keys())
+        self.start_year = START_YEAR
+
+        # Initialize PyAlex
+        pyalex.config.email = os.getenv("PYALEX_EMAIL")
+
+        # getting max values based on the config
+        self.max_entry_per_city = (
+            self.config.target_queries * self.config.location_based_ratio
+        ) / sum(len(CITIES[country]) for country in COUNTRIES.keys())
+
+        self.max_entry_per_institution = (
+            self.config.target_queries * self.config.institution_focused_ratio
+        ) / len(pyalex.Institutions().get())
+
+        # Initialize the body of work
+        self.institution_based_searches = []
+        self.city_based_searches = []
+        self.country_based_searches = []
+        self.field_based_searches = []
+
+        self.role_variations = [
+            "researchers",
+            "experts",
+            "scientists",
+            "professors",
+            "specialists",
+            "academics",
+            "researchers",
+        ]
+
+    async def initialize_data(self) -> None:
+        """Initialize OpenAlex data caches"""
+        rprint("[white]Initializing main OpenAlex query and topic maps...[/white]")
+
+        await self._get_main_query()
+        await self._get_topic_maps()
+
+        rprint("[green]Starting building all the queries...[/green]")
+
+        # self._get_city_based_searches()
+        # self._get_country_based_searches()
+        await self._get_institution_based_searches()
+
+        rprint(
+            f"[green]Cached {len(self.institution_based_searches)} institution-based searches[/green]"
+        )
+
+    async def _execute_openalex_query(
+        self, topic: Dict, location_or_institution: Dict, is_institution: bool
+    ) -> List[Lead]:
+        """Execute OpenAlex query and convert results to Lead objects with rate limiting"""
+        try:
+            # Search for works using topics.id filter with rate limiting
+            # Try with publication date filter first, fallback without it if needed
+            try:
+                if is_institution:
+                    works = await rate_limited_api_call(
+                        lambda: pyalex.Works()
+                        .filter(**{"topics.id": topic["id"]})
+                        .filter(
+                            **{
+                                "authorships.institutions.id": location_or_institution[
+                                    "id"
+                                ]
+                            }
+                        )
+                        .filter(**{"publication_date": ">2024-06-01"})
+                        .get(per_page=self.config.max_results_per_query)
+                    )
+                else:
+                    works = await rate_limited_api_call(
+                        lambda: pyalex.Works()
+                        .filter(**{"topics.id": topic["id"]})
+                        .filter(
+                            **{
+                                "authorships.institutions.country_code": location_or_institution[
+                                    "country_code"
+                                ]
+                            }
+                        )
+                        .filter(**{"publication_date": ">2024-06-01"})
+                        .get(per_page=self.config.max_results_per_query)
+                    )
+            except Exception as date_filter_error:
+                # If date filtering fails, try without it
+                rprint(
+                    f"[yellow]Date filter failed, trying without date restriction: {date_filter_error}[/yellow]"
+                )
+
+                if is_institution:
+                    works = await rate_limited_api_call(
+                        lambda: pyalex.Works()
+                        .filter(**{"topics.id": topic["id"]})
+                        .filter(
+                            **{
+                                "authorships.institutions.id": location_or_institution[
+                                    "id"
+                                ]
+                            }
+                        )
+                        .get(per_page=self.config.max_results_per_query)
+                    )
+                else:
+                    works = await rate_limited_api_call(
+                        lambda: pyalex.Works()
+                        .filter(**{"topics.id": topic["id"]})
+                        .filter(
+                            **{
+                                "authorships.institutions.country_code": location_or_institution[
+                                    "country_code"
+                                ]
+                            }
+                        )
+                        .get(per_page=self.config.max_results_per_query)
+                    )
+
+            # Extract unique authors
+            authors_seen = set()
+            leads = []
+
+            for work in works:
+                for authorship in work.get("authorships", []):
+                    author = authorship.get("author", {})
+                    author_id = author.get("id")
+
+                    if author_id and author_id not in authors_seen:
+                        authors_seen.add(author_id)
+
+                        # Get author institutions as list
+                        institutions = []
+                        for inst in authorship.get("institutions", []):
+                            if inst.get("display_name"):
+                                institutions.append(inst["display_name"])
+
+                        # If no institutions found, add placeholder
+                        if not institutions:
+                            institutions = ["Unknown Institution"]
+
+                        # Department as list - use topic field
+                        departments = [topic["display_name"]]
+
+                        lead = Lead(
+                            name=author.get("display_name", "Unknown"),
+                            title="Researcher",
+                            headline=f"Researcher at {institutions[0]}",
+                            location=institutions[0],
+                            summary=f"Author in {topic['display_name']} field",
+                            institution=institutions,  # List of institutions
+                            department=departments,  # List of departments
+                        )
+                        leads.append(lead)
+
+                        if len(leads) >= self.config.max_results_per_query:
+                            break
+
+                    if len(leads) >= self.config.max_results_per_query:
+                        break
+
+            return leads
+
+        except Exception as e:
+            rprint(f"[red]Error executing OpenAlex query: {e}[/red]")
+            return []
+
+    async def _execute_location_based_query(
+        self, topic: Dict, city_data: Dict
+    ) -> List[Lead]:
+        pass
+
+    async def _get_main_query(self):
+        """This is main query to iterate over and generate all the necessary queries"""
+
+        self.main_query = (
+            pyalex.Works()
+            .filter(publication_year=f">{self.start_year}")
+            .filter(authorships={"institutions.country_code": self.country_string})
+        )
+
+    async def _get_topic_maps(self):
+        """Creates a map of topic ids for countries, cities and institutions"""
+        self.topics_per_country = defaultdict(set)  # {country_code: [topic_id_1, ..]}
+        self.topics_per_city = defaultdict(set)  # {city: [topic_id_1, ..]}
+        self.topics_per_institution = defaultdict(
+            set
+        )  # {institution_id: [topic_id_1, ..]}
+
+        valid_queries = 0
+        for record in chain(*self.main_query.paginate(per_page=200)):
+            if valid_queries >= self.config.target_queries:
+                return
+            authorships = record.get("authorships", [])
+            if not authorships:
+                continue
+
+            for author in authorships:
+                institution = author.get("institutions", [])
+                if not institution:
+                    continue
+                for inst in institution:
+                    if inst.get("country_code") in COUNTRIES.keys():
+                        # Adding record on country level
+                        self.topics_per_country[inst.get("country_code")].add(
+                            record["primary_topic"]["id"]
+                        )
+                        valid_queries += 1
+
+                        # Adding record on institution level
+                        self.topics_per_institution[inst.get("id")].add(
+                            record["primary_topic"]["id"]
+                        )
+                        valid_queries += 1
+
+                        # Adding record on city level
+                        institution_search = (
+                            pyalex.Institutions()
+                            .search_filter(display_name=inst.get("display_name"))
+                            .get()
+                        )
+
+                        for inst_ in institution_search:
+                            if inst_.get("id") == inst.get("id"):
+                                city = inst_.get("geo", {}).get("city")
+                                print(inst_.get("geo", {}))
+                                if city:
+                                    self.topics_per_city[city].add(
+                                        record["primary_topic"]["id"]
+                                    )
+                                    valid_queries += 1
+
+        return
+
+    async def _get_city_based_searches(self) -> List[Dict]:
+        pass
+
+    async def _get_country_based_searches(self) -> List[Dict]:
+        pass
+
+    async def _get_institution_based_searches(self) -> List[Dict]:
+        """Given a topic and an institution, generate a list of leads for each topic"""
+        for institution_id in self.topics_per_institution.keys():
+            for topic_id in self.topics_per_institution[institution_id]:
+                self.institution_based_searches.append(
+                    await self._process_institution_based_searches(
+                        topic_id, institution_id
+                    )
+                )
+
+    async def _process_institution_based_searches(
+        self, topic_id: str, institution_id: str
+    ) -> LeadResults:
+        """Process institution-based searches for a list of topics and an institution"""
+        query_results = (
+            pyalex.Works()
+            .filter(publication_year=f">{self.start_year}")
+            .filter(authorships={"institutions.country_code": self.country_string})
+            .filter(authorships={"institutions.id": institution_id})
+            .filter(topics={"id": topic_id})
+            .get()
+        )
+        rprint(
+            f"Query params: year: {self.start_year}, country: {self.country_string}, institution: {institution_id}, topic: {topic_id}"
+        )
+        leads = []
+        title = random.choice(ROLES)
+        topic_name = ""
+        institution_name = ""
+        openalex_results = None
+        selected_authors = set()
+
+        for record in query_results:
+            if record.get("authorships", []):
+                for authorship in record.get("authorships", []):
+                    if authorship.get("institutions", []):
+                        for inst in authorship.get("institutions", []):
+                            if inst.get("id") == institution_id:
+                                # getting relevant openalex data
+                                topic = record.get("primary_topic", {})
+                                topic_name = topic.get("display_name")
+                                topic_keywords = topic.get("keywords")
+                                topic_domain = topic.get("domain").get("display_name")
+                                topic_field = topic.get("field").get("display_name")
+                                topic_subfield = topic.get("subfield").get(
+                                    "display_name"
+                                )
+                                institution_name = inst.get("display_name")
+                                target_researcher_id = authorship.get("author", {}).get(
+                                    "id"
+                                )
+                                target_researcher_name = authorship.get(
+                                    "author", {}
+                                ).get("display_name")
+                                work_id = record.get("id")
+
+                                if target_researcher_id in selected_authors:
+                                    continue
+
+                                selected_authors.add(target_researcher_id)
+
+                                # getting the final leads
+                                leads.append(
+                                    Lead(
+                                        name=target_researcher_name,
+                                        title=title,
+                                        headline=f"Researcher in {inst.get('display_name')}",
+                                        institution=inst.get("display_name"),
+                                        source_url=target_researcher_id,
+                                    )
+                                )
+
+                                openalex_results = OpenAlexResults(
+                                    topic_id=topic_id,
+                                    topic_display_name=topic_name,
+                                    topic_keywords=topic_keywords,
+                                    topic_domain=topic_domain,
+                                    topic_field=topic_field,
+                                    topic_subfield=topic_subfield,
+                                    institution_id=institution_id,
+                                    institution_country=inst.get("country_code"),
+                                    target_researcher_id=target_researcher_id,
+                                    target_researcher_name=target_researcher_name,
+                                    work_id=work_id,
+                                )
+
+        # Validate that we have all required data
+        if not openalex_results or not topic_name or not leads:
+            raise ValueError(
+                f"Missing required data for institution {institution_id}, topic {topic_id}: "
+                f"openalex_results={openalex_results is not None}, "
+                f"topic_name='{topic_name}', "
+                f"leads_count={len(leads)}"
+            )
+
+        research_params = ResearchParams(
+            who_query=title,
+            what_query=topic_name,
+            where_query=institution_name,
+        )
+        query_string = build_final_query(research_params)
+
+        sample = Sample(
+            query_params=research_params,
+            query_string=query_string,
+            query_type=QueryType.INSTITUTION_FOCUSED,
+            expected_results=LeadResults(leads=leads),
+            openalex_results=openalex_results,
+        )
+
+        return sample
+
+    async def _get_field_based_searches(self) -> List[Dict]:
+        pass
+
+
+async def main():
+    """Example usage of the synthetic query generator"""
+    config = GenerationConfig(
+        target_queries=100,  # Start with smaller number for testing
+        batch_size=10,
+        max_results_per_query=5,
+        checkpoint_dir="notebooks/checkpoints/synthetic_queries",
+        output_file="notebooks/synthetic_queries_sample.json",
+    )
+
+    generator = SyntheticQueryGenerator(config)
+    results = await generator.generate_queries()
+
+    print(f"\nGenerated {len(results)} synthetic queries!")
+
+    # Show a few examples
+    print("\nSample queries:")
+    for i, result in enumerate(results[:3]):
+        print(f"\n{i + 1}. {result.query_string}")
+        print(f"   Found {len(result.results.leads)} leads")
+        if result.results.leads:
+            print(f"   Sample lead: {result.results.leads[0].name}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

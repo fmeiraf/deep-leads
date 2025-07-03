@@ -1,4 +1,5 @@
-from typing import Optional
+from enum import Enum
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +36,7 @@ class Lead(BaseModel):
     )
     phone: Optional[str] = None
     website: Optional[str] = None
+    institution: Optional[str] = None
     background_summary: Optional[str] = Field(
         description="A short summary of the person's background, research interests, and publications",
         default=None,
@@ -98,13 +100,9 @@ class LeadResults(BaseModel):
 
 
 class ResearcherResults(BaseModel):
-    task: str = Field(
-        description="The task that the researcher was assigned",
-    )
-    search_strategy: str = Field(
-        description="The search strategy that the researcher used",
-    )
-    leads: list[Lead]
+    task: str
+    search_strategy: str
+    leads: LeadResults
 
     def to_string(self) -> str:
         """
@@ -122,3 +120,38 @@ class EvalParams(BaseModel):
     expected_results: LeadResults = Field(
         description="The expected results of the query",
     )
+
+
+class OpenAlexResults(BaseModel):
+    topic_id: Optional[str] = None
+    topic_display_name: Optional[str] = None
+    topic_keywords: Optional[List[str]] = None
+    topic_domain: Optional[str] = None
+    topic_field: Optional[str] = None
+    topic_subfield: Optional[str] = None
+    institution_id: Optional[str] = None
+    institution_country: Optional[str] = None
+    city: Optional[str] = None
+    target_researcher_id: Optional[str] = None
+    target_researcher_name: Optional[str] = None
+    work_id: Optional[str] = None
+
+
+class QueryType(str, Enum):
+    """Types of synthetic queries"""
+
+    DOMAIN_TOPIC = "domain_topic"
+    INSTITUTION_FOCUSED = "institution_focused"
+    INDIVIDUAL_RESEARCHER = "individual_researcher"
+    LOCATION_BASED = "location_based"  # focusing on city
+
+    def __str__(self):
+        return self.value
+
+
+class Sample(BaseModel):
+    query_params: ResearchParams
+    query_string: str
+    query_type: QueryType
+    expected_results: LeadResults
+    openalex_results: OpenAlexResults
