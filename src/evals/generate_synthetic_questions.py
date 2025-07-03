@@ -149,6 +149,7 @@ class SyntheticQueryGenerator:
 
         # Initialize PyAlex
         pyalex.config.email = os.getenv("PYALEX_EMAIL")
+        self.city_search_cache = {}
 
         # getting max values based on the config
         self.max_entry_per_city = (
@@ -184,12 +185,14 @@ class SyntheticQueryGenerator:
 
         rprint("[green]Starting building all the queries...[/green]")
 
-        # self._get_city_based_searches()
+        await self._get_city_based_searches()
         await self._get_country_based_searches()
         await self._get_institution_based_searches()
 
         rprint(
-            f"[green]Cached {len(self.institution_based_searches)} institution-based searches[/green]"
+            f"[green]Cached {len(self.institution_based_searches)} institution-based searches,"
+            f"{len(self.city_based_searches)} city-based searches,"
+            f"{len(self.country_based_searches)} country-based searches[/green]"
         )
 
     async def _execute_openalex_query(
@@ -370,14 +373,24 @@ class SyntheticQueryGenerator:
                                 print(inst_.get("geo", {}))
                                 if city:
                                     self.topics_per_city[city].add(
-                                        record["primary_topic"]["id"]
+                                        (
+                                            record["primary_topic"]["id"],
+                                            inst.get("country_code"),
+                                        )
                                     )
                                     valid_queries += 1
 
         return
 
     async def _get_city_based_searches(self) -> List[Dict]:
-        pass
+        rprint("[cyan]Processing city-based searches...[/cyan]")
+        for city in self.topics_per_city.keys():
+            for topic_id, country_code in self.topics_per_city[city]:
+                self.city_based_searches.append(
+                    await self._process_city_based_searches(
+                        topic_id, country_code, city
+                    )
+                )
 
     async def _get_country_based_searches(self) -> List[Dict]:
         rprint("[cyan]Processing country-based searches...[/cyan]")
@@ -398,9 +411,126 @@ class SyntheticQueryGenerator:
                     )
                 )
 
+    async def _process_city_based_searches(
+        self, topic_id: str, country_code: str, city: str
+    ) -> Sample:
+        """Process institution-based searches for a list of topics and an institution"""
+        query_results = (
+            pyalex.Works()
+            .filter(publication_year=f">{self.start_year}")
+            .filter(authorships={"institutions.country_code": country_code})
+            .filter(topics={"id": topic_id})
+            .get()
+        )
+
+        leads = []
+        title = random.choice(ROLES)
+        topic_name = ""
+        institution_name = ""
+        openalex_results = None
+        selected_authors = set()
+
+        for record in query_results:
+            if record.get("authorships", []):
+                for authorship in record.get("authorships", []):
+                    if authorship.get("institutions", []):
+                        for inst in authorship.get("institutions", []):
+                            if inst.get("country_code") == country_code:
+                                if inst.get("id") in self.city_search_cache:
+                                    city_search = self.city_search_cache[inst.get("id")]
+                                else:
+                                    institution_code = inst.get("id").split("/")[-1]
+                                    institution_search = pyalex.Institutions()[
+                                        institution_code
+                                    ]
+
+                                    city_search = institution_search.get("geo", {}).get(
+                                        "city"
+                                    )
+                                    self.city_search_cache[inst.get("id")] = city_search
+
+                                if city_search != city:
+                                    continue
+
+                                # getting relevant openalex data
+                                topic = record.get("primary_topic", {})
+                                topic_name = topic.get("display_name")
+                                topic_keywords = topic.get("keywords")
+                                topic_domain = topic.get("domain").get("display_name")
+                                topic_field = topic.get("field").get("display_name")
+                                topic_subfield = topic.get("subfield").get(
+                                    "display_name"
+                                )
+                                institution_name = inst.get("display_name")
+                                target_researcher_id = authorship.get("author", {}).get(
+                                    "id"
+                                )
+                                target_researcher_name = authorship.get(
+                                    "author", {}
+                                ).get("display_name")
+                                work_id = record.get("id")
+
+                                if target_researcher_id in selected_authors:
+                                    continue
+
+                                selected_authors.add(target_researcher_id)
+
+                                # getting the final leads
+                                leads.append(
+                                    Lead(
+                                        name=target_researcher_name,
+                                        title=title,
+                                        headline=f"Researcher in {institution_name}",
+                                        institution=institution_name,
+                                        source_url=target_researcher_id,
+                                    )
+                                )
+
+                                openalex_results = OpenAlexResults(
+                                    topic_id=topic_id,
+                                    topic_display_name=topic_name,
+                                    topic_keywords=topic_keywords,
+                                    topic_domain=topic_domain,
+                                    topic_field=topic_field,
+                                    topic_subfield=topic_subfield,
+                                    institution_id=inst.get("id"),
+                                    institution_country=country_code,
+                                    city=city,
+                                    target_researcher_id=target_researcher_id,
+                                    target_researcher_name=target_researcher_name,
+                                    work_id=work_id,
+                                )
+
+        # Validate that we have all required data
+        if not openalex_results or not topic_name or not leads:
+            raise ValueError(
+                f"Missing required data for city {city}, country {country_code}, topic {topic_id}: "
+                f"openalex_results={openalex_results is not None}, "
+                f"topic_name='{topic_name}', "
+                f"leads_count={len(leads)}"
+            )
+
+        research_params = ResearchParams(
+            who_query=title,
+            what_query=topic_name,
+            where_query=city,
+        )
+
+        query_string = build_final_query(research_params)
+
+        sample = Sample(
+            query_params=research_params,
+            query_string=query_string,
+            query_type=QueryType.INSTITUTION_FOCUSED,
+            expected_results=LeadResults(leads=leads),
+            openalex_results=openalex_results,
+        )
+
+        return sample
+
     async def _process_country_based_searches(
         self, topic_id: str, country_code: str
-    ) -> LeadResults:
+    ) -> Sample:
         """Process institution-based searches for a list of topics and an institution"""
         query_results = (
             pyalex.Works()
@@ -499,7 +629,7 @@ class SyntheticQueryGenerator:
 
     async def _process_institution_based_searches(
         self, topic_id: str, institution_id: str
-    ) -> LeadResults:
+    ) -> Sample:
         """Process institution-based searches for a list of topics and an institution"""
         query_results = (
             pyalex.Works()
