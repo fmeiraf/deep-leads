@@ -10,6 +10,7 @@ import pyalex
 from pydantic import BaseModel, Field
 from rich import print as rprint
 from rich.console import Console
+from tqdm import tqdm
 
 from src.agents.utils.build_final_query import build_final_query
 from src.types import (
@@ -377,7 +378,7 @@ class SyntheticQueryGenerator:
 
     async def _get_city_based_searches(self) -> List[Dict]:
         rprint("[cyan]Processing city-based searches...[/cyan]")
-        for city in self.topics_per_city.keys():
+        for city in tqdm(self.topics_per_city.keys(), desc="City-based searches"):
             for topic_id, country_code in self.topics_per_city[city]:
                 self.city_based_searches.append(
                     await self._process_city_based_searches(
@@ -387,7 +388,9 @@ class SyntheticQueryGenerator:
 
     async def _get_country_based_searches(self) -> List[Dict]:
         rprint("[cyan]Processing country-based searches...[/cyan]")
-        for country_code in self.topics_per_country.keys():
+        for country_code in tqdm(
+            self.topics_per_country.keys(), desc="Country-based searches"
+        ):
             for topic_id in self.topics_per_country[country_code]:
                 self.country_based_searches.append(
                     await self._process_country_based_searches(topic_id, country_code)
@@ -396,7 +399,9 @@ class SyntheticQueryGenerator:
     async def _get_institution_based_searches(self) -> List[Dict]:
         """Given a topic and an institution, generate a list of leads for each topic"""
         rprint("[cyan]Processing institution-based searches...[/cyan]")
-        for institution_id in self.topics_per_institution.keys():
+        for institution_id in tqdm(
+            self.topics_per_institution.keys(), desc="Institution-based searches"
+        ):
             for topic_id in self.topics_per_institution[institution_id]:
                 self.institution_based_searches.append(
                     await self._process_institution_based_searches(
