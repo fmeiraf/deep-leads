@@ -28,7 +28,6 @@ COUNTRIES = {
     "GB": "United Kingdom",
     "CA": "Canada",
     "AU": "Australia",
-    "BR": "Brazil",
 }
 
 
@@ -875,7 +874,7 @@ class SyntheticQueryGenerator:
         research_params = ResearchParams(
             who_query=title,
             what_query=topic_name,
-            where_query=city,
+            where_query=f"{city}, {COUNTRIES[country_code]}",
         )
 
         query_string = build_final_query(research_params)
@@ -996,7 +995,6 @@ class SyntheticQueryGenerator:
         query_results = (
             pyalex.Works()
             .filter(publication_year=f">{self.start_year}")
-            .filter(authorships={"institutions.country_code": self.country_string})
             .filter(authorships={"institutions.id": institution_id})
             .filter(topics={"id": topic_id})
             .get()
@@ -1008,6 +1006,7 @@ class SyntheticQueryGenerator:
         institution_name = ""
         openalex_results = None
         selected_authors = set()
+        institution_country = ""
 
         for record in query_results:
             if record.get("authorships", []):
@@ -1025,6 +1024,7 @@ class SyntheticQueryGenerator:
                                     "display_name"
                                 )
                                 institution_name = inst.get("display_name")
+                                institution_country = inst.get("country_code")
                                 target_researcher_id = authorship.get("author", {}).get(
                                     "id"
                                 )
@@ -1075,9 +1075,9 @@ class SyntheticQueryGenerator:
         research_params = ResearchParams(
             who_query=title,
             what_query=topic_name,
-            where_query=institution_name,
+            where_query=COUNTRIES[institution_country],
         )
-        query_string = build_final_query(research_params)
+        query_string = build_final_query(research_params, True, institution_name)
 
         sample = Sample(
             query_params=research_params,
