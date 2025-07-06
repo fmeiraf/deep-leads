@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import random
 from collections import defaultdict
 from itertools import chain
 from pathlib import Path
@@ -785,7 +784,7 @@ class SyntheticQueryGenerator:
         )
 
         leads = []
-        title = random.choice(ROLES)
+        title = "Professor | Researcher | Scientist"
         topic_name = ""
         institution_name = ""
         openalex_results = None
@@ -815,12 +814,17 @@ class SyntheticQueryGenerator:
 
                                 # getting relevant openalex data
                                 topic = record.get("primary_topic", {})
-                                topic_name = topic.get("display_name")
+
                                 topic_keywords = topic.get("keywords")
                                 topic_domain = topic.get("domain").get("display_name")
                                 topic_field = topic.get("field").get("display_name")
                                 topic_subfield = topic.get("subfield").get(
                                     "display_name"
+                                )
+                                topic_name = (
+                                    topic.get("display_name")
+                                    if not topic_subfield
+                                    else f"{topic.get('display_name')} ({topic_subfield})"
                                 )
                                 institution_name = inst.get("display_name")
                                 target_researcher_id = authorship.get("author", {}).get(
@@ -902,7 +906,7 @@ class SyntheticQueryGenerator:
         )
 
         leads = []
-        title = random.choice(ROLES)
+        title = "Professor | Researcher | Scientist"
         topic_name = ""
         institution_name = ""
         openalex_results = None
@@ -916,12 +920,17 @@ class SyntheticQueryGenerator:
                             if inst.get("country_code") == country_code:
                                 # getting relevant openalex data
                                 topic = record.get("primary_topic", {})
-                                topic_name = topic.get("display_name")
+
                                 topic_keywords = topic.get("keywords")
                                 topic_domain = topic.get("domain").get("display_name")
                                 topic_field = topic.get("field").get("display_name")
                                 topic_subfield = topic.get("subfield").get(
                                     "display_name"
+                                )
+                                topic_name = (
+                                    topic.get("display_name")
+                                    if not topic_subfield
+                                    else f"{topic.get('display_name')} ({topic_subfield})"
                                 )
                                 institution_name = inst.get("display_name")
                                 target_researcher_id = authorship.get("author", {}).get(
@@ -1001,7 +1010,7 @@ class SyntheticQueryGenerator:
         )
 
         leads = []
-        title = random.choice(ROLES)
+        title = "Professor | Researcher | Scientist"
         topic_name = ""
         institution_name = ""
         openalex_results = None
@@ -1016,14 +1025,27 @@ class SyntheticQueryGenerator:
                             if inst.get("id") == institution_id:
                                 # getting relevant openalex data
                                 topic = record.get("primary_topic", {})
-                                topic_name = topic.get("display_name")
+
                                 topic_keywords = topic.get("keywords")
                                 topic_domain = topic.get("domain").get("display_name")
                                 topic_field = topic.get("field").get("display_name")
                                 topic_subfield = topic.get("subfield").get(
                                     "display_name"
                                 )
-                                institution_name = inst.get("display_name")
+                                topic_name = (
+                                    topic.get("display_name")
+                                    if not topic_subfield
+                                    else f"{topic.get('display_name')} ({topic_subfield})"
+                                )
+
+                                institution_name_alternatives = inst.get(
+                                    "display_name_alternatives", []
+                                )
+                                institution_name = (
+                                    inst.get("display_name")
+                                    if not institution_name_alternatives
+                                    else f"{inst.get('display_name')} (also known as {', '.join(institution_name_alternatives)})"
+                                )
                                 institution_country = inst.get("country_code")
                                 target_researcher_id = authorship.get("author", {}).get(
                                     "id"
